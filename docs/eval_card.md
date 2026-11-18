@@ -48,3 +48,39 @@ Card này đi kèm mỗi báo cáo và được dùng lại ở Day 10.
 - **Khi nào tăng eval-set version:**
   - Khi bổ sung test case mới từ trace case gặp phải trong thực tế hoặc phát hiện failure mode mới.
   - Khi nâng cấp lên `v2` tích hợp bộ tấn công đối kháng `adversarial_v2.json` và phân rã các lát cắt slice `money_movement`, `adversarial`. Khi đổi phiên bản eval set, toàn bộ baseline phải được chạy lại từ đầu trên commit gốc.
+
+---
+
+## Phần mở rộng: Eval Set v2 & Phân tích Nâng cao (Advanced / Expert — M5, M6, M7)
+
+- **Thông số v2:**
+  - Eval set v2: `data/eval/eval_set_v2.jsonl` (28 items, sha: `4afcb773987e`), bao gồm 14 items v1 gốc và 14 items tấn công đối kháng (`adversarial_v2.json`).
+  - Baseline v2: `reports/baseline_v2.json` (Run ID: `E-swarm-20261118-4afc`).
+  - Metric spec v2: `config/metric_spec_v2.yaml`.
+
+- **A/A Testing & Ngưỡng dải nhiễu (M6):**
+  - Chạy kiểm thử A/A (`python -m lab9.mutation --spec config/metric_spec_v2.yaml --aa 66,77,88,99,110`) giữa hai tập seed `[11, 22, 33, 44, 55]` và `[66, 77, 88, 99, 110]` trên shape `swarm`.
+  - Trên **MockLLM**, mọi $\Delta$ đo được đều bằng đúng $0.0000$ vì mô hình hoàn toàn tất định (deterministic lookup/replay).
+  - Trên **LLM thực tế**, do nhiệt độ lấy mẫu (temperature > 0), bản chất stochastic của mô hình ngôn ngữ và sự thay đổi định tuyến inference, luôn tồn tại một dải nhiễu ngẫu nhiên $\Delta_{\text{noise}} > 0$. Nếu đặt sàn kiểm tra (threshold floor) hoặc dung sai CI nằm bên trong dải nhiễu A/A này, các PR trung thực không lỗi (như `honest_refactor` hay bản refactor sạch) sẽ bị gate chặn nhầm ngẫu nhiên (False Alarms). Do đó, sàn kiểm tra bắt buộc phải được thiết lập nằm ngoài biên trên của dải nhiễu A/A.
+
+- **Độ ổn định với $\text{pass\textasciicircum}k$ ($\text{pass\_hat\_5}$) (M6):**
+  - Metric $\text{pass\textasciicircum}5$ ($\text{pass\_hat\_5}$, Yao et al. 2024, $\tau$-bench) ước lượng xác suất để một agent vượt qua thành công **toàn bộ 5 seed** độc lập: $\text{pass\textasciicircum}k = \binom{c}{k} / \binom{n}{k}$.
+  - Đối với lỗi chập chờn `flaky_regression` (lỗi làm tròn xuất hiện ở 1/5 seed): Tỷ lệ pass trung bình `pass_rate` vẫn đạt $0.9143$ (vượt qua sàn $0.85$ thông thường). Tuy nhiên, $\text{pass\_hat\_5}$ tụt dốc thảm hại xuống $0.5714$, bị chặn dứt khoát bởi sàn blocking $\text{pass\_hat\_5} \ge 0.80$.
+
+- **Lát cắt (Slice Gate) bắt lỗi hồi quy cục bộ (M5):**
+  - Lỗi `slice_regression` chỉ cộng gộp điều khoản sai trên các seed lẻ của các đơn hàng có phát sinh giao dịch bồi hoàn tiền thật. Tỷ lệ trung bình toàn bộ eval set vẫn đạt $0.9357$ (trên sàn $0.85$) và khoảng tin cậy toàn cục vẫn chạm 0.
+  - Tuy nhiên, lát cắt **`slice:money_movement`** (tập hợp các item có `refund_vnd > 0`) đã phát hiện sự sụt giảm nghiêm trọng trong luồng tiền và chặn đứng PR (`exit 1 — blocked: slice:money_movement/pass_rate`).
+  - Lát cắt **`slice:adversarial`** kiểm soát chặt chẽ 14 kịch bản tấn công đối kháng (prompt injection, trích dẫn clause cũ hết hạn, truy cập chéo tài khoản), ngăn chặn các lỗ hổng bảo mật rò rỉ vào production.
+
+- **Giới hạn cỡ mẫu (Sample Size Limitations):**
+  - Với cỡ mẫu $n=5$ seed, một lỗi có tần suất xuất hiện hiếm $\approx 1/3$ seed (`rare`, xác suất lỗi $p \approx 0.333$) **không thể** được phát hiện một cách ổn định.
+  - Xác suất để một lỗi xác suất $1/3$ không lộ diện trong cả 5 seed độc lập là $(1 - 1/3)^5 \approx (2/3)^5 \approx 13.17\%$. Điều này đồng nghĩa có tới hơn 13% rủi ro lỗi lọt qua gate mà không bị bắt.
+  - Không bao giờ được nới lỏng hay hạ thấp ngưỡng kiểm tra một cách giả tạo để cố bắt các lỗi hiếm này; giải pháp kỹ thuật đúng đắn khi muốn kiểm soát lỗi hiếm là mở rộng số lượng hạt giống ($n \ge 20$ seeds) hoặc áp dụng kỹ thuật sinh test ca chuyên biệt (metamorphic fuzzing).
+
+- **Khả năng chống gian lận kết quả đánh giá (Integrity Check — M7):**
+  - Gate kiểm soát toàn diện và chặn đứng $100\%$ ($4/4$) các bẫy gian lận báo cáo công khai:
+    1. `evaluator_errors_as_nan`: Bẫy grader crash để điểm biến thành NaN nhằm lọt qua so sánh.
+    2. `dropped_failing_rows`: Bẫy cố tình xóa bớt các dòng trial bị fail khỏi báo cáo PR.
+    3. `cherry_picked_seeds`: Bẫy chỉ chọn lọc các seed cho điểm số đẹp và gạt bỏ seed xấu.
+    4. `loosened_spec`: Bẫy tự ý hạ thấp ngưỡng hoặc xóa bỏ lát cắt kiểm tra trong cùng PR (bị chặn bởi nguyên tắc Ratchet).
+  - Tỷ lệ vượt qua trap: $0\%$ lọt (toàn bộ bị chặn với lý do `INTEGRITY`).
